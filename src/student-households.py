@@ -51,10 +51,10 @@ pums_hh["ADJINC_FACTOR"] = pums_hh["ADJINC"] / 1_000_000
 pums_hh["ADJHSG_FACTOR"] = pums_hh["ADJHSG"] / 1_000_000
 
 #adjust income and housing cost variables by multiplying by the adjustment factors
-pums_hh["FINCP_ADJ"] = pums_hh["FINCP"] * pums_hh["ADJINC_FACTOR"]
-pums_hh["HINCP_ADJ"] = pums_hh["HINCP"] * pums_hh["ADJINC_FACTOR"]
+pums_hh["FINCP_ADJ"] = pums_hh["FINCP"] * pums_hh["ADJINC_FACTOR"] #adjusted family income
+pums_hh["HINCP_ADJ"] = pums_hh["HINCP"] * pums_hh["ADJINC_FACTOR"] #adjusted household income
 
-pums_hh["ELEP_ADJ"]  = pums_hh["ELEP"]  * pums_hh["ADJHSG_FACTOR"] #monght electirc
+pums_hh["ELEP_ADJ"]  = pums_hh["ELEP"]  * pums_hh["ADJHSG_FACTOR"] #monthly electricity
 pums_hh["FULP_ADJ"]  = pums_hh["FULP"]  * pums_hh["ADJHSG_FACTOR"] #ANNUAL fuel
 pums_hh["GASP_ADJ"]  = pums_hh["GASP"]  * pums_hh["ADJHSG_FACTOR"] #monthly gas
 pums_hh["GRNTP_ADJ"] = pums_hh["GRNTP"] * pums_hh["ADJHSG_FACTOR"] #monthly gross rent
@@ -75,6 +75,10 @@ pums_hh["UNDERGRAD_HH"] = pums_hh["SCHG"] == 15
 pums_hh["GRAD_HH"] = pums_hh["SCHG"] == 16
 
 
+# create flags for housing cost burdened households (those with housing costs > 30% of income)
+pums_hh["RENT_BURDENED"] = pums_hh["GRNTP_ADJ"] / pums_hh["HINCP_ADJ"] > 0.3
+pums_hh["OWN_BURDENED"] = pums_hh["SMOCP_ADJ"] / pums_hh["HINCP_ADJ"] > 0.3
+pums_hh["ANY_BURDENED"] = pums_hh["RENT_BURDENED"] | pums_hh["OWN_BURDENED"]    
 
 # Replicate weights
 
@@ -135,5 +139,91 @@ def puma_student_hh_table(df):
 
 
 puma_table = puma_student_hh_table(pums_hh)
-print(puma_table)
-puma_table.to_csv("outputs/puma_student_led_hh.csv")
+#print(puma_table)
+#puma_table.to_csv("outputs/puma_student_led_hh.csv")
+
+# create table of student-led households by PUMA and any housing cost burden
+
+def puma_student_hh_burden_table(df):
+    records = []
+
+    for puma, grp in df.groupby("PUMA"):
+        undergrad   = grp["UNDERGRAD_HH"]
+        grad        = grp["GRAD_HH"]
+
+        est_ug_burdened, se_ug_burdened = weighted_count_and_se(grp, undergrad & grp["ANY_BURDENED"])
+        est_grad_burdened, se_grad_burdened = weighted_count_and_se(grp, grad & grp["ANY_BURDENED"])
+
+        records.append({
+            "PUMA": puma,
+
+            "undergrad_hh_burdened_est": est_ug_burdened,
+            "undergrad_hh_burdened_se":  se_ug_burdened,
+            "undergrad_hh_burdened_cv":  se_ug_burdened  / est_ug_burdened  if est_ug_burdened  > 0 else np.nan,
+
+            "grad_hh_burdened_est":   est_grad_burdened,
+            "grad_hh_burdened_se":    se_grad_burdened,
+            "grad_hh_burdened_cv":    se_grad_burdened  / est_grad_burdened  if est_grad_burdened  > 0 else np.nan,
+        })
+
+    return pd.DataFrame(records).set_index("PUMA") 
+
+
+# calculate median income by student-led household status and PUMA using replicate weights
+def weighted_median_income(df, condition):
+    """
+    Returns (estimate, standard_error) for a weighted median income
+    using ACS replicate weights.
+    """
+    # account for negative incomes by filtering to positive incomes only for the median calculation
+    df = df[df["HINCP_ADJ"] > 0]
+
+    # account for negative weights by filtering to positive weights only for the median calculation
+    for w in REPLICATE_WEIGHTS:
+        df = df[df[w] > 0]
+
+    # Point estimate
+    est = df.loc[condition, "HINCP_ADJ"].median()
+
+    # Replicate estimates
+    rep_ests = np.array([
+        df.loc[condition, "HINCP_ADJ"].sample(frac=1, weights=df[w], replace=True).median()
+        for w in REPLICATE_WEIGHTS
+    ])
+
+    se = np.sqrt((4 / 80) * np.sum((rep_ests - est) ** 2))
+    return est, se
+
+def puma_student_hh_income_table(df):
+    records = []
+
+    for puma, grp in df.groupby("PUMA"):
+        undergrad   = grp["UNDERGRAD_HH"]
+        grad        = grp["GRAD_HH"]
+
+        est_ug_income, se_ug_income = weighted_median_income(grp, undergrad)
+        est_grad_income, se_grad_income = weighted_median_income(grp, grad)
+
+        records.append({
+            "PUMA": puma,
+
+            "undergrad_hh_median_income_est": est_ug_income,
+            "undergrad_hh_median_income_se":  se_ug_income,
+            "undergrad_hh_median_income_cv":  se_ug_income  / est_ug_income  if est_ug_income  > 0 else np.nan,
+
+            "grad_hh_median_income_est":   est_grad_income,
+            "grad_hh_median_income_se":    se_grad_income,
+            "grad_hh_median_income_cv":    se_grad_income  / est_grad_income  if est_grad_income  > 0 else np.nan,
+        })
+
+    return pd.DataFrame(records).set_index("PUMA")
+
+puma_income_table = puma_student_hh_income_table(pums_hh)
+#print(puma_income_table)
+
+# add median income to the burden table
+puma_burden_table = puma_student_hh_burden_table(pums_hh)
+puma_burden_table = puma_burden_table.join(puma_income_table)
+#print(puma_burden_table)
+
+puma_burden_table.to_csv("outputs/puma_student_cost_burden.csv")

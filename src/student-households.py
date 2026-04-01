@@ -136,3 +136,4 @@ def puma_student_hh_table(df):
 
 puma_table = puma_student_hh_table(pums_hh)
 print(puma_table)
+puma_table.to_csv("outputs/puma_student_led_hh.csv")

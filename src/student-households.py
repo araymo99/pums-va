@@ -203,6 +203,7 @@ def puma_student_hh_income_table(df):
 
         est_ug_income, se_ug_income = weighted_median_income(grp, undergrad)
         est_grad_income, se_grad_income = weighted_median_income(grp, grad)
+        est_median_income, se_median_income = weighted_median_income(grp, pd.Series([True] * len(grp), index=grp.index))
 
         records.append({
             "PUMA": puma,
@@ -214,6 +215,10 @@ def puma_student_hh_income_table(df):
             "grad_hh_median_income_est":   est_grad_income,
             "grad_hh_median_income_se":    se_grad_income,
             "grad_hh_median_income_cv":    se_grad_income  / est_grad_income  if est_grad_income  > 0 else np.nan,
+
+            "median_income_est":   est_median_income,
+            "median_income_se":    se_median_income,
+            "median_income_cv":    se_median_income  / est_median_income  if est_median_income  > 0 else np.nan,
         })
 
     return pd.DataFrame(records).set_index("PUMA")
@@ -227,3 +232,133 @@ puma_burden_table = puma_burden_table.join(puma_income_table)
 #print(puma_burden_table)
 
 puma_burden_table.to_csv("outputs/puma_student_cost_burden.csv")
+
+# create a table of median household size for all households, undergraduate-led households, and graduate-led households by PUMA
+def weighted_median_hh_size(df, condition):
+    """
+    Returns (estimate, standard_error) for a weighted median household size
+    using ACS replicate weights.
+    """
+
+    # exclude negative estimates and weights for the median calculation
+    df = df[df["NP"] > 0]
+    for w in REPLICATE_WEIGHTS:
+        df = df[df[w] > 0]
+
+    # Point estimate
+    est = df.loc[condition, "NP"] .median()
+
+    # Replicate estimates
+    rep_ests = np.array([
+        df.loc[condition, "NP"].sample(frac=1, weights=df[w], replace=True).median()
+        for w in REPLICATE_WEIGHTS
+    ])
+
+    se = np.sqrt((4 / 80) * np.sum((rep_ests - est) ** 2))
+    return est, se
+
+# calculate the weighted average household size for undergraduate-led households, graduate-led households, and all households by PUMA
+def average_hh_size(df, condition):
+    """
+    Returns (estimate, standard_error) for a weighted average household size
+    using ACS replicate weights.
+    """ 
+    #exclude negative weights for the average calculation
+    for w in REPLICATE_WEIGHTS:
+        df = df[df[w] > 0]
+
+    # Point estimate
+    est = np.average(df.loc[condition, "NP"], weights=df.loc[condition, "WGTP"])
+
+    # Replicate estimates
+    rep_ests = np.array([
+        np.average(df.loc[condition, "NP"], weights=df.loc[condition, w])
+        for w in REPLICATE_WEIGHTS
+    ])
+
+    se = np.sqrt((4 / 80) * np.sum((rep_ests - est) ** 2))
+    return est, se
+
+def puma_student_hh_size_table(df):
+    records = []
+
+    for puma, grp in df.groupby("PUMA"):
+        undergrad   = grp["UNDERGRAD_HH"]
+        grad        = grp["GRAD_HH"]
+
+        est_ug_size, se_ug_size = weighted_median_hh_size(grp, undergrad)
+        est_grad_size, se_grad_size = weighted_median_hh_size(grp, grad)
+        est_median_size, se_median_size = weighted_median_hh_size(grp, pd.Series([True] * len(grp), index=grp.index))
+
+        est_avg_ug_size, se_avg_ug_size = average_hh_size(grp, undergrad)
+        est_avg_grad_size, se_avg_grad_size = average_hh_size(grp, grad)
+        est_avg_median_size, se_avg_median_size = average_hh_size(grp, pd.Series([True] * len(grp), index=grp.index))
+
+        records.append({
+            "PUMA": puma,
+
+            "undergrad_hh_median_size_est": est_ug_size,
+            "undergrad_hh_median_size_se":  se_ug_size,
+      
+
+            "grad_hh_median_size_est":   est_grad_size,
+            "grad_hh_median_size_se":    se_grad_size,
+     
+
+            "median_hh_size_est":   est_median_size,
+            "median_hh_size_se":    se_median_size,
+
+            "undergrad_hh_avg_size_est": est_avg_ug_size,
+            "undergrad_hh_avg_size_se":  se_avg_ug_size,
+
+            "grad_hh_avg_size_est":   est_avg_grad_size,
+            "grad_hh_avg_size_se":    se_avg_grad_size,
+
+            "median_hh_avg_size_est":   est_avg_median_size,
+            "median_hh_avg_size_se":    se_avg_median_size,
+     
+        })
+
+    return pd.DataFrame(records).set_index("PUMA")
+puma_size_table = puma_student_hh_size_table(pums_hh)
+puma_size_table.to_csv("outputs/puma_student_hh_size.csv")
+
+# create a table of student households by renter or owner status and PUMA
+pums_hh["RENTER_HH"] = pums_hh["TEN"] == 3
+# tenure == 1 or 2 for homeowners
+pums_hh["OWNER_HH"] = pums_hh["TEN"].isin([1, 2])
+
+
+def puma_student_hh_tenure_table(df):
+    records = []
+
+    for puma, grp in df.groupby("PUMA"):
+        undergrad   = grp["UNDERGRAD_HH"]
+        grad        = grp["GRAD_HH"]
+
+        est_ug_renter, se_ug_renter = weighted_count_and_se(grp, undergrad & grp["RENTER_HH"])
+        est_ug_owner, se_ug_owner = weighted_count_and_se(grp, undergrad & grp["OWNER_HH"])
+
+        est_grad_renter, se_grad_renter = weighted_count_and_se(grp, grad & grp["RENTER_HH"])
+        est_grad_owner, se_grad_owner = weighted_count_and_se(grp, grad & grp["OWNER_HH"])
+
+        records.append({
+            "PUMA": puma,
+
+            "undergrad_hh_renter_est": est_ug_renter,
+            "undergrad_hh_renter_se":  se_ug_renter,
+
+            "undergrad_hh_owner_est": est_ug_owner,
+            "undergrad_hh_owner_se":  se_ug_owner,
+
+            "grad_hh_renter_est": est_grad_renter,
+            "grad_hh_renter_se":  se_grad_renter,
+
+            "grad_hh_owner_est": est_grad_owner,
+            "grad_hh_owner_se":  se_grad_owner,
+        })
+
+    return pd.DataFrame(records).set_index("PUMA")  
+puma_tenure_table = puma_student_hh_tenure_table(pums_hh)
+puma_tenure_table.to_csv("outputs/puma_student_hh_tenure.csv")
+
